@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hyper Snake FUSION - Multiplayer</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #151515;
+            --bg-gradient: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            --primary: #00f260;
+            --primary-gradient: linear-gradient(to right, #00f260, #0575e6);
+            --glass: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #ffffff;
+            --text-dim: #a0a0a0;
+            --font-head: 'Orbitron', sans-serif;
+            --font-body: 'Poppins', sans-serif;
+        }
+
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: var(--bg-color); font-family: var(--font-body); user-select: none; width: 100vw; height: 100vh; }
+        * { box-sizing: border-box; }
+        canvas#gameCanvas { position: absolute; top: 0; left: 0; display: block; z-index: 1; background-color: #1a1a2e; }
+        
+        #ui-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 20; font-family: var(--font-head); }
+        #fpsBox { position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.5); padding: 5px 10px; border-radius: 4px; font-size: 14px; color: #00ff00; font-family: monospace; }
+        #scoreBox { position: absolute; bottom: 30px; left: 30px; color: #ffffff; text-shadow: 0px 2px 4px rgba(0,0,0,0.8); display: flex; flex-direction: column; align-items: flex-start; }
+        #scoreLabel { font-size: 12px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; }
+        #scoreValue { font-size: 32px; font-weight: 700; line-height: 1; }
+        #leaderboard { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.5); padding: 15px; border-radius: 10px; color: white; }
+        #leaderboard h3 { margin: 0 0 10px 0; font-size: 16px; color: var(--primary); }
+        #leaderboard ol { margin: 0; padding-left: 20px; font-size: 14px; }
+        
+        #login-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-gradient); z-index: 100; display: flex; justify-content: center; align-items: center; }
+        #login-box { text-align: center; width: 400px; padding: 40px; background: rgba(0,0,0,0.6); border-radius: 20px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        h1 { font-family: var(--font-head); font-size: 3rem; margin: 0 0 30px 0; background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        input { width: 100%; padding: 15px; margin-bottom: 20px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; border-radius: 10px; font-family: var(--font-body); font-size: 1.1rem; text-align: center; }
+        input:focus { outline: none; border-color: var(--primary); }
+        button#play-btn { width: 100%; padding: 15px; border: none; border-radius: 50px; background: var(--primary-gradient); color: white; font-family: var(--font-head); font-size: 1.2rem; cursor: pointer; transition: transform 0.2s; font-weight: 700; }
+        button#play-btn:hover { transform: scale(1.05); }
+
+        #disconnect-overlay { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index: 200; justify-content: center; align-items: center; color: white; font-size: 2rem; font-family: var(--font-head); }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui-layer" style="display:none;">
+        <div id="fpsBox">Ping: 0ms</div>
+        <div id="scoreBox">
+            <span id="scoreLabel">Mass</span>
+            <span id="scoreValue">0</span>
+        </div>
+        <div id="leaderboard">
+            <h3>Top Snakes</h3>
+            <ol id="lb-list"></ol>
+        </div>
+    </div>
+
+    <div id="login-screen">
+        <div id="login-box">
+            <h1>HYPER SNAKE<br>FUSION</h1>
+            <input type="text" id="nickname" placeholder="Enter Nickname" maxlength="12">
+            <button id="play-btn">JOIN SERVER</button>
+        </div>
+    </div>
+
+    <div id="disconnect-overlay">
+        <div>CONNECTION LOST<br><button onclick="location.reload()" style="margin-top:20px; font-size:1rem; padding:10px 30px; cursor:pointer;">RECONNECT</button></div>
+    </div>
+
+    <script>
+        // --- CLIENT CONFIG ---
+        // Change this if your server is hosted elsewhere, otherwise '/' works for relative path
+        const SERVER_URL = '/'; 
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false }); // Optimize
+        const uiLayer = document.getElementById('ui-layer');
+        const loginScreen = document.getElementById('login-screen');
+        const scoreVal = document.getElementById('scoreValue');
+        const lbList = document.getElementById('lb-list');
+        const fpsBox = document.getElementById('fpsBox');
+        
+        let socket;
+        let gameState = { players: {}, food: [] };
+        let myId = null;
+        let camera = { x: 0, y: 0, z: 1 };
+        let mouseX = 0, mouseY = 0;
+        let isBoosting = false;
+        let frameCount = 0;
+
+        // Visual constants
+        const MAP_SIZE = 2500;
+        const PI_2 = Math.PI * 2;
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Input Handling
+        window.addEventListener('mousemove', e => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            sendInput();
+        });
+        
+        window.addEventListener('mousedown', () => { isBoosting = true; sendInput(); });
+        window.addEventListener('mouseup', () => { isBoosting = false; sendInput(); });
+        
+        window.addEventListener('touchmove', e => {
+            e.preventDefault();
+            mouseX = e.touches[0].clientX;
+            mouseY = e.touches[0].clientY;
+            sendInput();
+        }, {passive: false});
+        
+        window.addEventListener('touchstart', e => { isBoosting = true; sendInput(); }, {passive: false});
+        window.addEventListener('touchend', () => { isBoosting = false; sendInput(); });
+
+        document.getElementById('play-btn').addEventListener('click', () => {
+            const name = document.getElementById('nickname').value || "Snake";
+            startGame(name);
+        });
+
+        function sendInput() {
+            if(!myId || !socket) return;
+            // Calculate angle relative to center of screen (where snake head is)
+            const angle = Math.atan2(mouseY - window.innerHeight/2, mouseX - window.innerWidth/2);
+            socket.emit('input', { angle, boost: isBoosting });
+        }
+
+        function startGame(name) {
+            socket = io(SERVER_URL);
+
+            socket.on('connect', () => {
+                socket.emit('join', { name });
+                loginScreen.style.display = 'none';
+                uiLayer.style.display = 'block';
+            });
+
+            socket.on('init', (data) => {
+                myId = data.id;
+            });
+
+            socket.on('state', (state) => {
+                gameState = state;
+                processGameState();
+            });
+
+            socket.on('disconnect', () => {
+                document.getElementById('disconnect-overlay').style.display = 'flex';
+            });
+            
+            // Simple Ping
+            setInterval(() => {
+                const start = Date.now();
+                socket.emit('ping', () => {
+                    fpsBox.innerText = `Ping: ${Date.now() - start}ms`;
+                });
+            }, 1000);
+
+            renderLoop();
+        }
+
+        function processGameState() {
+            // Update UI
+            if (gameState.players[myId]) {
+                scoreVal.innerText = Math.floor(gameState.players[myId].score);
+            }
+            
+            // Update Leaderboard
+            const sorted = Object.values(gameState.players).sort((a,b) => b.score - a.score).slice(0, 5);
+            lbList.innerHTML = sorted.map(p => `<li>${p.name.substring(0,10)}: ${Math.floor(p.score)}</li>`).join('');
+        }
+
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+            
+            // Background
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!gameState.players[myId]) return; // Waiting for spawn
+            
+            const me = gameState.players[myId];
+            
+            // Camera follow logic
+            camera.x = me.x;
+            camera.y = me.y;
+            // Smooth zoom based on size
+            const targetZoom = Math.max(0.4, 1 - (me.score / 1000)); 
+            camera.z += (targetZoom - camera.z) * 0.05;
+
+            ctx.save();
+            ctx.translate(canvas.width/2, canvas.height/2);
+            ctx.scale(camera.z, camera.z);
+            ctx.translate(-camera.x, -camera.y);
+
+            // Draw Map Borders
+            ctx.strokeStyle = 'rgba(255,0,0,0.5)';
+            ctx.lineWidth = 10;
+            ctx.beginPath();
+            ctx.arc(0, 0, MAP_SIZE, 0, PI_2);
+            ctx.stroke();
+
+            // Draw Grid
+            drawGrid();
+
+            // Draw Food
+            gameState.food.forEach(f => {
+                ctx.fillStyle = f.c;
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = f.c;
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.s, 0, PI_2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            });
+
+            // Draw Players
+            Object.values(gameState.players).forEach(p => {
+                drawSnake(p);
+            });
+
+            ctx.restore();
+        }
+
+        function drawSnake(p) {
+            const isMe = p.id === myId;
+            
+            // Segments
+            for (let i = p.seg.length - 1; i >= 0; i--) {
+                const seg = p.seg[i];
+                // Gradient effect
+                ctx.fillStyle = isMe ? '#00f260' : (p.hue ? `hsl(${p.hue}, 70%, 50%)` : '#ff0055');
+                
+                // Glow for head
+                if (i === 0) {
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = ctx.fillStyle;
+                } else {
+                    ctx.shadowBlur = 0;
+                }
+
+                ctx.beginPath();
+                ctx.arc(seg.x, seg.y, p.s, 0, PI_2);
+                ctx.fill();
+            }
+            
+            // Name tag
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${p.s * 1.5}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.fillText(p.name, p.x, p.y - p.s * 2);
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+            ctx.lineWidth = 1;
+            const gridSize = 100;
+            // Calculate visible area for optimization could go here, 
+            // but for now we draw a fixed large area around camera
+            const startX = Math.floor((camera.x - canvas.width/camera.z)/gridSize)*gridSize;
+            const endX = Math.floor((camera.x + canvas.width/camera.z)/gridSize)*gridSize + gridSize;
+            const startY = Math.floor((camera.y - canvas.height/camera.z)/gridSize)*gridSize;
+            const endY = Math.floor((camera.y + canvas.height/camera.z)/gridSize)*gridSize + gridSize;
+            
+            ctx.beginPath();
+            for (let x = startX - 1000; x < endX + 1000; x += gridSize) {
+                ctx.moveTo(x, startY - 1000);
+                ctx.lineTo(x, endY + 1000);
+            }
+            for (let y = startY - 1000; y < endY + 1000; y += gridSize) {
+                ctx.moveTo(startX - 1000, y);
+                ctx.lineTo(endX + 1000, y);
+            }
+            ctx.stroke();
+        }
+    </script>
+</body>
+</html>
