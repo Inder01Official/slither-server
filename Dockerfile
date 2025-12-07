@@ -1,20 +1,18 @@
-# Use a lightweight Node.js image
+# Use lightweight Node image
 FROM node:18-alpine
 
 # Create app directory
 WORKDIR /usr/src/app
 
-# Initialize project (creates package.json automatically)
-RUN npm init -y
+# Install app dependencies
+COPY package*.json ./
+RUN npm install
 
-# Install WebSocket library
-RUN npm install ws
-
-# Copy server code
-COPY server.js .
+# Bundle app source
+COPY . .
 
 # Expose the port the app runs on
 EXPOSE 3000
 
-# Start the server
-CMD [ "node", "server.js" ]
+# Start the game
+CMD [ "npm", "start" ]
